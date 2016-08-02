@@ -7,9 +7,12 @@ package com.lwansbrough.RCTCamera;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.hardware.Camera;
+import android.media.CamcorderProfile;
 import android.media.MediaActionSound;
+import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Environment;
+import android.os.AsyncTask;
 import android.provider.MediaStore;
 import android.util.Base64;
 import android.util.Log;
@@ -25,7 +28,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
 
-public class RCTCameraModule extends ReactContextBaseJavaModule {
+public class RCTCameraModule extends ReactContextBaseJavaModule implements MediaRecorder.OnInfoListener {
     private static final String TAG = "RCTCameraModule";
 
     public static final int RCT_CAMERA_ASPECT_FILL = 0;
@@ -55,6 +58,11 @@ public class RCTCameraModule extends ReactContextBaseJavaModule {
 
     private final ReactApplicationContext _reactContext;
     private RCTSensorOrientationChecker _sensorOrientationChecker;
+
+    private MediaRecorder mMediaRecorder = null;
+    private Promise mVideoPromise = null;
+    private Camera mCamera = null;
+    private String mVideoDestinationUri;
 
     public RCTCameraModule(ReactApplicationContext reactContext) {
         super(reactContext);
@@ -195,7 +203,8 @@ public class RCTCameraModule extends ReactContextBaseJavaModule {
     }
 
     public void captureWithOrientation(final ReadableMap options, final Promise promise, int deviceOrientation) {
-        Camera camera = RCTCamera.getInstance().acquireCameraInstance(options.getInt("type"));
+        RCTCamera rCamera = RCTCamera.getInstance();
+        Camera camera = rCamera.acquireCameraInstance(options.getInt("type"));
         if (null == camera) {
             promise.reject("No camera found.");
             return;
@@ -207,10 +216,28 @@ public class RCTCameraModule extends ReactContextBaseJavaModule {
         }
 
         if (options.hasKey("quality")) {
-            RCTCamera.getInstance().setCaptureQuality(options.getInt("type"), options.getString("quality"));
+            rCamera.setCaptureQuality(options.getInt("type"), options.getString("quality"));
         }
 
-        RCTCamera.getInstance().adjustCameraRotationToDeviceOrientation(options.getInt("type"), deviceOrientation);
+        rCamera.adjustCameraRotationToDeviceOrientation(options.getInt("type"), deviceOrientation);
+
+        if (options.getInt("mode") == RCT_CAMERA_CAPTURE_MODE_VIDEO) {
+            captureVideo(options, rCamera, promise);
+            return;
+        }
+
+        if (options.getInt("mode") == RCT_CAMERA_CAPTURE_MODE_STILL) {
+            capturePicture(options, rCamera, promise);
+            return;
+        }
+
+        promise.reject("Unable to find given capture mode", null);
+        return;
+
+    }
+
+    private void capturePicture(final ReadableMap options, RCTCamera rCamera, final Promise promise) {
+        Camera camera = rCamera.acquireCameraInstance(options.getInt("type"));
         camera.takePicture(null, null, new Camera.PictureCallback() {
             @Override
             public void onPictureTaken(byte[] data, Camera camera) {
@@ -277,9 +304,159 @@ public class RCTCameraModule extends ReactContextBaseJavaModule {
         });
     }
 
+    protected void captureVideo(ReadableMap options, RCTCamera rCamera, Promise promise) {
+        Camera camera = rCamera.acquireCameraInstance(options.getInt("type"));
+        mCamera = camera;
+        // Get the video destination
+        File destination;
+        switch (options.getInt("target")) {
+            case RCT_CAMERA_CAPTURE_TARGET_DISK:
+                destination = getOutputMediaFile(MEDIA_TYPE_VIDEO);
+                break;
+            case RCT_CAMERA_CAPTURE_TARGET_TEMP:
+            default:
+                destination = getTempMediaFile(MEDIA_TYPE_VIDEO);
+                break;
+        }
+
+        // Store promise, camera and file location for later
+        mVideoPromise = promise;
+        mVideoDestinationUri = Uri.fromFile(destination).toString();
+
+        // Try a hack for samsung HQ, didn't help (http://stackoverflow.com/questions/7225571/camcorderprofile-quality-high-resolution-produces-green-flickering-video)
+        // Camera.Parameters parameters = mCamera.getParameters();
+        // Camera.Size previewSize = parameters.getPreviewSize();
+        // parameters.set("cam_mode", 1);
+        // parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_INFINITY);
+        // mCamera.setParameters(parameters);
+
+        // Setup media recorder (watch out with modifying these options, the order is important!)
+        // @see http://developer.android.com/guide/topics/media/camera.html#capture-video
+        mMediaRecorder = new MediaRecorder();
+        mCamera.unlock();
+        // Attach callback to handle maxDuration (@see onInfo method in this file)
+        mMediaRecorder.setOnInfoListener(this);
+        mMediaRecorder.setCamera(mCamera);
+
+        // Set AV sources
+        mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER);
+        mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.CAMERA);
+
+        // Set orientation hit
+//        int orientation = rCamera.getCorrectCameraOrientation(options.getInt("type"));
+//        mMediaRecorder.setOrientationHint(orientation);
+        // Create a profile
+        int quality;
+        switch (options.getString("quality")) {
+            case "low":
+                quality = CamcorderProfile.QUALITY_LOW; // select the lowest res
+                break;
+            case "medium":
+                quality = CamcorderProfile.QUALITY_720P; // select medium
+                break;
+            case "high":
+                quality = CamcorderProfile.QUALITY_HIGH; // select the highest res (default)
+                break;
+            default:
+                releaseMediaRecorder();
+                promise.reject("No valid quality option given");
+                return;
+        }
+        CamcorderProfile profile = CamcorderProfile.get(quality);
+        // Modify profile
+        // profile.fileFormat = MediaRecorder.OutputFormat.THREE_GPP;
+        profile.fileFormat = MediaRecorder.OutputFormat.MPEG_4;
+        profile.audioCodec = MediaRecorder.AudioEncoder.AMR_NB;
+        profile.videoCodec = MediaRecorder.VideoEncoder.H264;
+        // profile.videoBitRate = 15;
+        // profile.videoFrameRate = 30;
+        mMediaRecorder.setProfile(profile);
+        // Same as profile settings from above, do not use both at the same time
+        // mMediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+        // mMediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
+        // mMediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
+        // mMediaRecorder.setVideoEncodingBitRate(15);
+        // mMediaRecorder.setVideoFrameRate(30);
+        // mMediaRecorder.setAudioEncodingBitRate(50000);
+
+        mMediaRecorder.setOutputFile(destination.getAbsolutePath());
+
+        // Set maxDuration when given as option, didn't seem to work when passed in to the profile
+        // On my devices, maxDuration couln't be less than 4 seconds
+        if (options.hasKey("totalSeconds")) {
+            int totalSeconds = options.getInt("totalSeconds");
+            // @todo not sure if this is the case on all platforms:
+            if (totalSeconds < 4) {
+                totalSeconds = 4;
+            }
+            mMediaRecorder.setMaxDuration(totalSeconds * 1000);
+        }
+        mMediaRecorder.setMaxFileSize(100 * 1000 * 1000); // = 100 MB
+
+        // Step 5: Set the preview output
+//        mMediaRecorder.setPreviewDisplay(mPreview.getHolder().getSurface());
+
+        try {
+            // prepare and start recording
+            mMediaRecorder.prepare();
+        } catch (IllegalStateException e) {
+            Log.e(TAG, "IllegalStateException: " + e.getMessage(), e);
+            releaseMediaRecorder();
+            promise.reject("IllegalStateException: " + e.getMessage(), e);
+        } catch (IOException e) {
+            Log.e(TAG, "IOException: " + e.getMessage(), e);
+            releaseMediaRecorder();
+            promise.reject("IOException: " + e.getMessage(), e);
+        }
+        // Start the recording in the background (@see RecordVideoTask down below)
+        // new RecordVideoTask().execute(null, null, null);
+        mMediaRecorder.start();
+    }
+
+    public void onInfo(MediaRecorder mr, int what, int extra) {
+        if (
+            what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED ||
+            what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED
+        ) {
+            releaseMediaRecorder();
+        }
+    }
+
+    // class RecordVideoTask extends AsyncTask<Void, Void, Boolean> {
+    //     @Override
+    //     protected Boolean doInBackground(Void... voids) {
+    //         mMediaRecorder.start();
+    //         return true;
+    //     }
+    // }
+
+    public void releaseMediaRecorder() {
+        try {
+            if (mMediaRecorder != null) {
+                mMediaRecorder.setOnInfoListener(null);
+                mMediaRecorder.stop();
+                mMediaRecorder.reset();
+                mMediaRecorder.release();
+                mMediaRecorder = null;
+            }
+        } catch (IllegalStateException e) {
+            Log.e(TAG, "error releasing media recorder", e);
+        }
+        if (mCamera != null) {
+            mCamera.lock();
+            mCamera = null;
+        }
+        if (mVideoPromise != null) {
+            mVideoPromise.resolve(mVideoDestinationUri);
+            mVideoPromise = null;
+        }
+    }
+
+
     @ReactMethod
-    public void stopCapture(final ReadableMap options, final Promise promise) {
-        // TODO: implement video capture
+    public void stopCapture(final Promise promise) {
+        releaseMediaRecorder();
+        promise.resolve("Stopped capture");
     }
 
     @ReactMethod

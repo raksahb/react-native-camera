@@ -4,3 +4,17 @@ node_modules
 ios/RCTCamera.xcodeproj/xcuserdata
 ios/RCTCamera.xcodeproj/project.xcworkspace
 .DS_Store
+
+# OSX
+#
+.DS_Store
+
+
+# Android/IJ
+#
+*.iml
+.idea
+.gradle
+local.properties
+
+android/build/**
