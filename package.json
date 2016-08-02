@@ -2,14 +2,14 @@
   "name": "react-native-camera",
   "repository": {
     "type" : "git",
-    "url" : "https://github.com/lwansbrough/react-native-camera.git"
+    "url" : "https://github.com/raksahb/react-native-camera.git"
   },
   "version": "0.3.8",
-  "description": "A Camera component for React Native. Also reads barcodes.",
-  "author": "Lochlan Wansbrough <lochie@live.com> (http://lwansbrough.com)",
+  "description": "A Camera component for React Native. Also reads barcodes. Initial support for Video recording on Android ported from vespakoen",
+  "author": "Lochlan Wansbrough <lochie@live.com> (http://lwansbrough.com), vespakoen, Bhaskar Athmanathan <bhaskar.athma@gamil.com>",
   "nativePackage": true,
   "license": "MIT",
-  "homepage": "https://github.com/lwansbrough/react-native-camera",
+  "homepage": "https://github.com/raksahb/react-native-camera",
   "keywords": [
     "react-native",
     "react",
