@@ -386,8 +386,8 @@ public class RCTCameraModule extends ReactContextBaseJavaModule implements Media
         if (options.hasKey("totalSeconds")) {
             int totalSeconds = options.getInt("totalSeconds");
             // @todo not sure if this is the case on all platforms:
-            if (totalSeconds < 4) {
-                totalSeconds = 4;
+            if (totalSeconds < 30) {
+                totalSeconds = 30;
             }
             mMediaRecorder.setMaxDuration(totalSeconds * 1000);
         }
@@ -415,7 +415,7 @@ public class RCTCameraModule extends ReactContextBaseJavaModule implements Media
 
     public void onInfo(MediaRecorder mr, int what, int extra) {
         if (
-            what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED ||
+//            what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED ||
             what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED
         ) {
             releaseMediaRecorder();
